@@ -1,0 +1,602 @@
+{
+  "id": "EmailTriageDemo1",
+  "name": "Tri des emails — règles, Jev, Claude",
+  "active": true,
+  "nodes": [
+    {
+      "id": "ffa890ad-b27d-542a-a1ac-df6ecc61646e",
+      "name": "Déclencheur démo (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        200
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-triage-demo",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "72c34e6d-e251-5ab8-8f76-56a9fbc5802b"
+    },
+    {
+      "id": "a9bf296c-ab4b-54f5-a9b8-d4b74c7ed65d",
+      "name": "Boîte mail IMAP (à configurer)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        460
+      ],
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "nothing",
+        "format": "resolved",
+        "options": {}
+      },
+      "disabled": true,
+      "notes": "Désactivé en démo. Ajoutez un identifiant IMAP (Gmail : mot de passe d'application) puis activez le nœud.",
+      "notesInFlow": true
+    },
+    {
+      "id": "2f51bd9a-25b5-54c5-9fc9-3cb10e56e602",
+      "name": "Charger les emails d'exemple",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.GATEWAY_URL }}/samples",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "ca532b12-b96b-5f81-b5da-f42d0ed7f601",
+      "name": "Un élément par email",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        680,
+        200
+      ],
+      "parameters": {
+        "fieldToSplitOut": "emails",
+        "options": {}
+      }
+    },
+    {
+      "id": "066f848b-61c3-5c58-aaf5-4b1f4878c513",
+      "name": "Créer le dossier de tri",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        320
+      ],
+      "parameters": {
+        "jsCode": "// Construit le « dossier de tri » { email } à partir d'un email d'exemple\n// ou d'un message lu par le nœud IMAP (format « resolved »).\nconst first = (v) => Array.isArray(v) ? v[0] : v;\nreturn $input.all().map((item) => {\n  const j = item.json;\n  if (j.message_id && j.from_address) return { json: { email: j } };\n  const from = first(j.from?.value) ?? {};\n  const headers = j.headers ?? {};\n  const unsubscribe = Boolean(headers['list-unsubscribe'] ?? headers['List-Unsubscribe']);\n  return { json: { email: {\n    message_id: j.messageId ?? j['message-id'] ?? headers['message-id'] ?? `${j.date}-${j.subject}`,\n    from_name: from.name ?? '',\n    from_address: (from.address ?? j.from?.text ?? String(j.from ?? '')).toLowerCase(),\n    subject: j.subject ?? '',\n    date: j.date ? new Date(j.date).toISOString() : null,\n    body: (j.text ?? j.textPlain ?? '').slice(0, 20000),\n    attachments: Object.values(item.binary ?? {}).map((b) => b.fileName).filter(Boolean),\n    list_unsubscribe: unsubscribe,\n  } } };\n});"
+      }
+    },
+    {
+      "id": "5e916c13-923a-5b74-b7a0-9a84eb1203e6",
+      "name": "Règles déterministes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GATEWAY_URL }}/triage/rules",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "669a2888-4138-5484-8519-a89c603df1c2",
+      "name": "Ignorer les emails déjà traités",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        1340,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "76454c3b-d91b-55c7-ae4b-477f9b662bfd",
+              "leftValue": "={{ $json.rules.already_processed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "12580a1d-8b95-537d-ace3-834700305b4d",
+      "name": "Une règle a tranché ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1560,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "15c11beb-0e54-527e-8891-dcc9f2c4f29e",
+              "leftValue": "={{ $json.rules.decided }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "3ae057c3-a749-5387-8ccd-c3c5833fadf6",
+      "name": "Contenu sensible ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1780,
+        440
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "bf2c411c-01ed-5853-9eba-a9b8765fe0ee",
+              "leftValue": "={{ $json.rules.sensitive }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "882ccc57-2ade-5986-9997-1a377b3944a9",
+      "name": "Jev — décision typée",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2000,
+        560
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GATEWAY_URL }}/triage/jev",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000,
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 500
+            }
+          }
+        }
+      },
+      "notes": "Catégorie + probabilités, puis urgence. API REST iajev.com.",
+      "notesInFlow": true
+    },
+    {
+      "id": "6166c9b1-7602-5c26-98c1-620d37a9668d",
+      "name": "Jev assez sûr ? (> seuil)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2220,
+        560
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d704b2ac-8b03-5816-9740-0543a46a2157",
+              "leftValue": "={{ $json.jev.escalate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "a9f8adb0-dfa6-59d7-9f4c-1becae455fe9",
+      "name": "Claude — arbitrage et brouillon",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2440,
+        440
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GATEWAY_URL }}/triage/claude",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000,
+          "batching": {
+            "batch": {
+              "batchSize": 2,
+              "batchInterval": 500
+            }
+          }
+        }
+      },
+      "notes": "Cas sensibles ou confiance Jev ≤ seuil. Résumé, action, brouillon (jamais envoyé).",
+      "notesInFlow": true
+    },
+    {
+      "id": "ca2e4fa3-35ed-546c-b9c1-d3f5a5ede10e",
+      "name": "Enregistrer la décision (Postgres)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2660,
+        320
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GATEWAY_URL }}/results",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      }
+    },
+    {
+      "id": "f719dd6d-6ce0-59f1-bd31-df28a7149113",
+      "name": "Alerte nécessaire ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2880,
+        320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "32e530dd-f8e6-5b57-9846-d0de7d361b8d",
+              "leftValue": "={{ $json.alert }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      }
+    },
+    {
+      "id": "8b100072-946e-5f8a-9659-e9e20b87a58a",
+      "name": "Envoyer l'alerte (webhook)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3100,
+        240
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ALERT_WEBHOOK_URL }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message_id: $json.message_id, subject: $json.subject, from: $json.from_address, category: $json.category, urgency: $json.urgency, needs_review: $json.needs_review, review_reason: $json.review_reason, proposed_action: $json.proposed_action, summary: $json.summary }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "5f262a79-b0e8-5075-8f1b-c4890d262903",
+      "name": "Gmail : appliquer le libellé (optionnel)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        3100,
+        440
+      ],
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ $('Créer le dossier de tri').item.json.email.id }}",
+        "labelIds": "={{ [ 'Tri/' + $json.category ] }}"
+      },
+      "disabled": true,
+      "notes": "Optionnel : avec le déclencheur Gmail, range le message sous le libellé de sa catégorie. Identifiant Gmail OAuth requis.",
+      "notesInFlow": true
+    },
+    {
+      "id": "a89d5102-a3e0-51f6-94d1-7fa13bf988cb",
+      "name": "Note — principe",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        220,
+        -120
+      ],
+      "parameters": {
+        "content": "## Tri automatique des emails\n1. **Règles** déterministes (gratuites)\n2. **Jev** : décision typée bon marché, voie directe si confiance > seuil\n3. **Claude** : cas incertains ou sensibles, résumé, action, brouillon\n\nToutes les décisions vont dans Postgres. Alerte webhook si urgent ou à vérifier.\n**Aucun email n'est jamais envoyé automatiquement.**",
+        "height": 260,
+        "width": 520
+      }
+    }
+  ],
+  "connections": {
+    "Déclencheur démo (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Charger les emails d'exemple",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Charger les emails d'exemple": {
+      "main": [
+        [
+          {
+            "node": "Un élément par email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Un élément par email": {
+      "main": [
+        [
+          {
+            "node": "Créer le dossier de tri",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Boîte mail IMAP (à configurer)": {
+      "main": [
+        [
+          {
+            "node": "Créer le dossier de tri",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Créer le dossier de tri": {
+      "main": [
+        [
+          {
+            "node": "Règles déterministes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Règles déterministes": {
+      "main": [
+        [
+          {
+            "node": "Ignorer les emails déjà traités",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ignorer les emails déjà traités": {
+      "main": [
+        [
+          {
+            "node": "Une règle a tranché ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Une règle a tranché ?": {
+      "main": [
+        [
+          {
+            "node": "Enregistrer la décision (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Contenu sensible ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contenu sensible ?": {
+      "main": [
+        [
+          {
+            "node": "Claude — arbitrage et brouillon",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Jev — décision typée",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jev — décision typée": {
+      "main": [
+        [
+          {
+            "node": "Jev assez sûr ? (> seuil)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jev assez sûr ? (> seuil)": {
+      "main": [
+        [
+          {
+            "node": "Enregistrer la décision (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Claude — arbitrage et brouillon",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude — arbitrage et brouillon": {
+      "main": [
+        [
+          {
+            "node": "Enregistrer la décision (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enregistrer la décision (Postgres)": {
+      "main": [
+        [
+          {
+            "node": "Alerte nécessaire ?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gmail : appliquer le libellé (optionnel)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alerte nécessaire ?": {
+      "main": [
+        [
+          {
+            "node": "Envoyer l'alerte (webhook)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all"
+  },
+  "pinData": {},
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

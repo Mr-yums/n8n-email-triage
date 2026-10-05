@@ -1,0 +1,88 @@
+# Tri automatique des emails — n8n + Jev + Claude.
+# `docker compose up --build` lance le MODE DÉMO : aucune clé, Jev et Claude simulés.
+name: n8n-email-triage
+
+x-gateway-image: &gateway-image n8n-email-triage-gateway:0.1.0
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: triage
+      POSTGRES_USER: triage
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-triage-demo-local}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U triage -d triage"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    image: *gateway-image
+    environment:
+      TRIAGE_MODE: ${TRIAGE_MODE:-demo}
+      DATABASE_URL: postgres://triage:${POSTGRES_PASSWORD:-triage-demo-local}@postgres:5432/triage
+      JEV_API_KEY: ${JEV_API_KEY:-}
+      JEV_BASE_URL: ${JEV_BASE_URL:-https://iajev.com}
+      JEV_MODEL: ${JEV_MODEL:-jev}
+      JEV_CONFIDENCE_THRESHOLD: ${JEV_CONFIDENCE_THRESHOLD:-0.85}
+      JEV_CREDIT_EUR: ${JEV_CREDIT_EUR:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-sonnet-5}
+      CLAUDE_EFFORT: ${CLAUDE_EFFORT:-low}
+      EUR_PER_USD: ${EUR_PER_USD:-}
+    volumes:
+      - ./config:/app/config:ro
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-18090}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.39.7
+    entrypoint: ["tini", "--", "/bin/sh", "/opt/triage/start-n8n.sh"]
+    environment:
+      GATEWAY_URL: http://gateway:8080
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-http://gateway:8080/demo/alerts}
+      # Le workflow lit GATEWAY_URL et ALERT_WEBHOOK_URL. Aucune clé d'API n'est donnée à n8n.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_SECURE_COOKIE: "false"
+      GENERIC_TIMEZONE: Europe/Paris
+      TZ: Europe/Paris
+    volumes:
+      - ./workflows:/opt/triage/workflows:ro
+      - ./n8n/start-n8n.sh:/opt/triage/start-n8n.sh:ro
+      - n8ndata:/home/node/.n8n
+    ports:
+      - "127.0.0.1:${N8N_PORT:-15678}:5678"
+    depends_on:
+      gateway:
+        condition: service_healthy
+
+  # Une seule fois : envoie le jeu d'exemples au workflow (mode démo uniquement), puis s'arrête.
+  demo-seed:
+    image: *gateway-image
+    command: ["seed"]
+    restart: "no"
+    environment:
+      TRIAGE_MODE: ${TRIAGE_MODE:-demo}
+      GATEWAY_URL: http://gateway:8080
+      N8N_DEMO_WEBHOOK: http://n8n:5678/webhook/email-triage-demo
+      DASHBOARD_PUBLIC_URL: http://localhost:${DASHBOARD_PORT:-18090}/
+    depends_on:
+      gateway:
+        condition: service_healthy
+      n8n:
+        condition: service_started
+
+volumes:
+  pgdata:
+  n8ndata:

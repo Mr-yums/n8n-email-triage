@@ -1,0 +1,14 @@
+# Secrets et environnement local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Rust
+gateway/target/
+
+# Divers
+.DS_Store
+*.log
+/tmp/

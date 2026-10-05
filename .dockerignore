@@ -1,0 +1,5 @@
+.git
+gateway/target
+docs
+*.md
+.env

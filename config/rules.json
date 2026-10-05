@@ -1,0 +1,23 @@
+{
+  "_comment": "Règles déterministes appliquées AVANT toute IA. Adresses exactes uniquement (leçon du prototype : pas de devinette sur un domaine). Valeurs fictives : remplacez-les par les expéditeurs réels de la PME.",
+  "known_senders": {
+    "notifications@urssaf-demo.example": "administratif",
+    "contact@cabinet-compta.example": "administratif",
+    "alertes@banque-demo.example": "administratif",
+    "candidatures@jobboard.example": "rh"
+  },
+  "invoice_suppliers": [
+    "factures@papeterie-durand.example",
+    "billing@cloudhost.example"
+  ],
+  "invoice_attachment_keywords": ["facture", "invoice", "inv", "fa"],
+  "bulk_mail_category": "spam",
+  "sensitive_patterns": {
+    "coordonnées bancaires": ["rib", "iban", "coordonnees bancaires", "bank details", "changement de banque"],
+    "juridique": ["mise en demeure", "mettons en demeure", "avocat", "huissier", "tribunal", "plainte", "contentieux", "lawsuit"],
+    "données personnelles": ["rgpd", "gdpr", "donnees personnelles", "suppression de mes donnees"],
+    "santé / contrat de travail": ["arret maladie", "arret de travail", "demission", "licenciement", "rupture conventionnelle"],
+    "fraude au président": ["gift card", "gift cards", "carte cadeau", "cartes cadeaux", "wire transfer", "virement urgent", "do not tell anyone", "keep this confidential"],
+    "identifiants": ["mot de passe", "password", "code de verification"]
+  }
+}

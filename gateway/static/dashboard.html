@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tri des emails — n8n + Jev + Claude</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --surface-0: #f4f3f0; --surface-1: #fcfcfb; --border: #e2e0da;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --warn-bg: #fff4d6; --warn-ink: #7a5200; --alert-bg: #fde5e4; --alert-ink: #8f1f1e;
+  --ok-ink: #106b10; --chip: #efeee9;
+}
+@media (prefers-color-scheme: dark) {
+  .viz-root {
+    color-scheme: dark;
+    --surface-0: #121211; --surface-1: #1a1a19; --border: #33332f;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    --warn-bg: #3a2c05; --warn-ink: #f2c55c; --alert-bg: #3d1716; --alert-ink: #f39b9a;
+    --ok-ink: #6fd46f; --chip: #2a2a27;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.viz-root { background: var(--surface-0); color: var(--text-primary); min-height: 100vh; padding: 28px 32px 48px; }
+header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+h1 { font-size: 22px; margin: 0; font-weight: 650; }
+.sub { color: var(--text-secondary); margin: 0 0 20px; }
+.mode { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--warn-bg); color: var(--warn-ink); }
+.mode.live { background: var(--chip); color: var(--text-secondary); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.tile .k { color: var(--text-secondary); font-size: 12px; }
+.tile .v { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.tile .n { color: var(--text-muted); font-size: 12px; }
+.panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 16px; }
+.panel h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+.bar { display: flex; height: 26px; gap: 2px; border-radius: 4px; overflow: hidden; position: relative; }
+.seg { height: 100%; position: relative; cursor: default; min-width: 2px; }
+.seg span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.legend { display: flex; gap: 18px; margin-top: 10px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.tip { position: fixed; pointer-events: none; background: var(--text-primary); color: var(--surface-1); padding: 6px 9px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity .1s; z-index: 10; }
+.filters { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.filters button { border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 13px; cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--text-secondary); font-weight: 600; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.subj { font-weight: 550; }
+.from { color: var(--text-muted); font-size: 12px; }
+.route { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.route i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.chip { background: var(--chip); border-radius: 4px; padding: 1px 7px; white-space: nowrap; }
+.flag { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: 12px; font-weight: 600; margin: 2px 4px 0 0; white-space: nowrap; }
+.flag.review { background: var(--warn-bg); color: var(--warn-ink); }
+.flag.urgent { background: var(--alert-bg); color: var(--alert-ink); }
+.ok { color: var(--ok-ink); } .ko { color: var(--alert-ink); font-weight: 600; }
+details summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+details pre { white-space: pre-wrap; font: inherit; font-size: 12px; background: var(--surface-0); padding: 8px; border-radius: 6px; margin: 6px 0 0; }
+.why { color: var(--text-muted); font-size: 12px; }
+footer { color: var(--text-muted); font-size: 12px; margin-top: 18px; }
+footer a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>Tri automatique des emails</h1>
+    <span id="mode" class="mode">…</span>
+  </header>
+  <p class="sub">Règles déterministes d'abord, Jev pour la décision typée, Claude pour les cas incertains ou sensibles. Rien n'est jamais envoyé sans un humain.</p>
+
+  <section class="tiles" aria-label="Indicateurs">
+    <div class="tile"><div class="k">Emails traités</div><div class="v" id="t-total">–</div><div class="n" id="t-match"></div></div>
+    <div class="tile"><div class="k">Tranchés par règle</div><div class="v" id="t-regle">–</div><div class="n">0 € — aucune IA</div></div>
+    <div class="tile"><div class="k">Tranchés par Jev</div><div class="v" id="t-jev">–</div><div class="n" id="t-credits"></div></div>
+    <div class="tile"><div class="k">Tranchés par Claude</div><div class="v" id="t-claude">–</div><div class="n" id="t-model"></div></div>
+    <div class="tile"><div class="k">Coût estimé / 1 000 emails</div><div class="v" id="t-cost1k">–</div><div class="n" id="t-cost"></div></div>
+    <div class="tile"><div class="k">À vérifier · alertes</div><div class="v" id="t-review">–</div><div class="n" id="t-alerts"></div></div>
+  </section>
+
+  <section class="panel" aria-label="Qui a tranché">
+    <h2>Qui a tranché ?</h2>
+    <div class="bar" id="bar" role="img" aria-label="Répartition des décisions"></div>
+    <div class="legend">
+      <span><i style="background:var(--series-1)"></i>Règle</span>
+      <span><i style="background:var(--series-2)"></i>Jev</span>
+      <span><i style="background:var(--series-3)"></i>Claude</span>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="Résultats">
+    <h2>Résultats</h2>
+    <div class="filters" id="filters">
+      <button data-f="all" aria-pressed="true">Tous</button>
+      <button data-f="regle" aria-pressed="false">Règle</button>
+      <button data-f="jev" aria-pressed="false">Jev</button>
+      <button data-f="claude" aria-pressed="false">Claude</button>
+      <button data-f="review" aria-pressed="false">À vérifier</button>
+      <button data-f="urgent" aria-pressed="false">Urgents</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Email</th><th>Catégorie</th><th>Confiance</th><th>Tranché par</th><th>Coût estimé</th><th>Action proposée</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="6">En attente des premiers résultats du workflow n8n…</td></tr></tbody>
+    </table>
+  </section>
+  <footer>Démo d'offre freelance « Automatiser un processus métier en 5 jours » — <a href="https://github.com/Mr-yums">github.com/Mr-yums</a>. Données entièrement fictives.</footer>
+  <div class="tip" id="tip"></div>
+</div>
+<script>
+const LABELS = { facture: "Facture", devis: "Devis / commercial", support: "Support client", rh: "RH / candidature",
+  administratif: "Administratif", spam: "Spam / prospection", autre: "Autre" };
+const ROUTES = { regle: ["Règle", "--series-1"], jev: ["Jev", "--series-2"], claude: ["Claude", "--series-3"] };
+const eur = (v, d = 4) => v.toLocaleString("fr-FR", { minimumFractionDigits: d, maximumFractionDigits: d }) + " €";
+const pct = v => Math.round(v * 100) + " %";
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let filter = "all", rows = [];
+
+document.getElementById("filters").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  filter = b.dataset.f;
+  document.querySelectorAll("#filters button").forEach(x => x.setAttribute("aria-pressed", x === b));
+  renderRows();
+});
+
+const tip = document.getElementById("tip");
+function showTip(e, text) { tip.textContent = text; tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px"; tip.style.opacity = 1; }
+
+function renderStats(s) {
+  const m = document.getElementById("mode");
+  m.textContent = s.mode === "demo" ? "MODE DÉMO — Jev et Claude simulés, aucune clé" : "MODE RÉEL";
+  m.className = "mode" + (s.mode === "demo" ? "" : " live");
+  const set = (id, v) => document.getElementById(id).textContent = v;
+  set("t-total", s.total);
+  set("t-match", s.with_expected ? `${s.matching_expected}/${s.with_expected} conformes à l'attendu` : "");
+  set("t-regle", s.by_route.regle); set("t-jev", s.by_route.jev); set("t-claude", s.by_route.claude);
+  set("t-credits", `${s.jev_credits} crédits · seuil > ${s.jev_threshold}`);
+  set("t-model", s.claude_model);
+  set("t-cost1k", eur(s.cost_per_1000_eur, 2));
+  set("t-cost", `total ${eur(s.cost_eur)}${s.simulated ? " (estimé)" : ""}`);
+  set("t-review", `${s.needs_review} · ${s.urgent}`);
+  set("t-alerts", `${s.alerts_received} alertes webhook reçues`);
+  const bar = document.getElementById("bar"); bar.innerHTML = "";
+  for (const [k, [label, color]] of Object.entries(ROUTES)) {
+    const n = s.by_route[k]; if (!n) continue;
+    const seg = document.createElement("div");
+    seg.className = "seg"; seg.style.flex = n; seg.style.background = `var(${color})`;
+    const share = s.total ? n / s.total : 0;
+    seg.innerHTML = share > 0.08 ? `<span>${label} · ${n}</span>` : "";
+    const text = `${label} : ${n} emails (${pct(share)})`;
+    seg.addEventListener("mousemove", e => showTip(e, text));
+    seg.addEventListener("mouseleave", () => tip.style.opacity = 0);
+    bar.appendChild(seg);
+  }
+}
+
+function renderRows() {
+  const tbody = document.getElementById("rows");
+  const list = rows.filter(r => filter === "all" || r.decided_by === filter
+    || (filter === "review" && r.needs_review) || (filter === "urgent" && r.urgency === "haute"));
+  if (!list.length) { tbody.innerHTML = `<tr><td colspan="6">Aucun résultat pour ce filtre.</td></tr>`; return; }
+  tbody.innerHTML = list.map(r => {
+    const [label, color] = ROUTES[r.decided_by];
+    const match = r.expected_category ? (r.expected_category === r.category ? `<span class="ok" title="conforme à l'attendu">✓</span>` : `<span class="ko" title="attendu : ${esc(LABELS[r.expected_category])}">✗</span>`) : "";
+    const flags = (r.urgency === "haute" ? `<span class="flag urgent">● Urgent</span>` : "")
+      + (r.needs_review ? `<span class="flag review" title="${esc(r.review_reason)}">⚠ À vérifier</span>` : "");
+    const why = r.decided_by === "regle" ? `règle « ${esc(r.rule_id)} »`
+      : r.escalation_reason ? esc(r.escalation_reason)
+      : r.jev_confidence != null ? `confiance Jev ${r.jev_confidence.toFixed(2)}` : "";
+    const draft = r.draft_reply ? `<details><summary>Brouillon de réponse (non envoyé)</summary><pre>${esc(r.draft_reply)}</pre></details>` : "";
+    const summary = r.summary ? `<div class="why">${esc(r.summary)}</div>` : "";
+    return `<tr>
+      <td><div class="subj">${esc(r.subject)}</div><div class="from">${esc(r.from_address)}</div>${flags}</td>
+      <td><span class="chip">${esc(LABELS[r.category] || r.category)}</span> ${match}</td>
+      <td class="num">${pct(r.confidence)}</td>
+      <td><span class="route"><i style="background:var(${color})"></i>${label}</span><div class="why">${why}</div></td>
+      <td class="num">${r.cost_eur ? eur(r.cost_eur) : "0 €"}</td>
+      <td>${esc(r.proposed_action)}${summary}${draft}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function refresh() {
+  try {
+    const [s, r] = await Promise.all([fetch("api/stats").then(x => x.json()), fetch("api/results").then(x => x.json())]);
+    renderStats(s); rows = r; renderRows();
+  } catch (e) { console.error(e); }
+}
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>
