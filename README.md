@@ -3,7 +3,7 @@
 [![CI](https://github.com/Mr-yums/n8n-email-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/Mr-yums/n8n-email-triage/actions/workflows/ci.yml)
 ![Licence MIT](https://img.shields.io/badge/licence-MIT-blue)
 
-> Démo de l'offre freelance **« Automatiser un processus métier en 5 jours »**.
+> Démo d'un tri d'emails pour PME : des règles simples, Jev, puis Claude, et un humain qui envoie.
 > Lancement en une commande, **mode démo sans aucune clé**, données 100 % fictives.
 > *English summary at the end.*
 
@@ -11,35 +11,44 @@
 
 ## Le problème
 
-Une PME reçoit chaque jour des dizaines d'emails mélangés : factures, demandes de devis, clients qui ont un souci, candidatures, courrier administratif, prospection… Quelqu'un les lit un par un pour savoir quoi en faire. C'est lent, des urgences passent à la trappe, et les arnaques (faux changement de RIB, fraude au président) arrivent au milieu du reste.
+Une PME reçoit chaque jour des emails de toute sorte : un client mécontent, une demande de contrat, une demande de devis, une facture, une candidature, un courrier administratif, de la prospection… Quelqu'un les lit un par un pour savoir quoi en faire. C'est lent, des urgences passent à la trappe, et les arnaques (faux changement de RIB, fraude au président) arrivent au milieu du reste.
 
-Envoyer chaque email à un grand modèle d'IA résout le tri, mais coûte cher à l'échelle et confie à une IA des décisions qui doivent rester humaines.
+Des règles de messagerie classiques trient l'évident (une facture d'un fournisseur connu, une newsletter). Envoyer tout le reste à un grand modèle d'IA marche, mais revient cher à l'échelle et confie à une IA des décisions qui doivent rester humaines.
 
-## La solution : du moins cher au plus cher, et un humain pour envoyer
+## Le pipeline
+
+1. **Réception.** Les emails arrivent dans n8n (IMAP, Gmail, ou le jeu d'exemples en démo) : plaintes, demandes de contrat, devis, factures, candidatures, administratif, prospection.
+2. **Règles simples** (gratuites, explicables) : expéditeurs connus, factures de fournisseurs connus avec PDF, envois de masse (`List-Unsubscribe`). Un contenu **sensible** (coordonnées bancaires, juridique, santé, RGPD, fraude) n'est jamais tranché par une règle : il part **directement chez Claude**.
+3. **[Jev](https://iajev.com) classe avec une confiance.** Décision typée via son API (`POST /api/v1/decisions/run`) : une catégorie parmi 7 avec des probabilités, puis l'urgence. Jev garde la main **seulement si sa confiance dépasse le seuil de 0,85**.
+4. **Sous le seuil, Claude relit et tranche.** Claude (API Messages d'Anthropic, `claude-sonnet-5` par défaut) reprend l'email avec tout le contexte, tranche, rédige un résumé, propose une action et un **brouillon de réponse**. Les cas sensibles de l'étape 2 suivent le même chemin.
+5. **Brouillon, jamais envoyé seul.** Les brouillons sont stockés en base et attendent un humain. Tout cas sensible est marqué « à vérifier » par un garde-fou indépendant du modèle.
+6. **Alertes et tableau de bord.** Les emails urgents ou à vérifier déclenchent une alerte webhook (Slack, Teams, ntfy, autre workflow n8n…). Le tableau de bord montre qui a tranché quoi, avec quelle confiance, et l'action proposée.
 
 ```mermaid
 flowchart LR
-    IN[Emails entrants<br/>IMAP / Gmail<br/>ou jeu d'exemples] --> R{Règles<br/>déterministes}
+    IN[Réception<br/>IMAP / Gmail<br/>ou jeu d'exemples] --> R{Règles<br/>simples}
     R -- expéditeur connu,<br/>facture fournisseur,<br/>envoi de masse --> DB[(Postgres<br/>triage_results)]
-    R -- contenu sensible<br/>RIB, juridique, santé,<br/>RGPD, fraude --> C[Claude<br/>arbitrage + résumé<br/>+ brouillon]
-    R -- sinon --> J[Jev<br/>décision typée<br/>catégorie + probabilités]
+    R -- contenu sensible<br/>RIB, juridique, santé,<br/>RGPD, fraude --> C[Claude<br/>relit, tranche<br/>+ brouillon]
+    R -- sinon --> J[Jev<br/>catégorie<br/>+ confiance]
     J -- confiance &gt; 0,85 --> DB
     J -- confiance ≤ 0,85<br/>ou Jev indisponible --> C
     C --> DB
     DB --> A{Urgent ou<br/>à vérifier ?}
-    A -- oui --> W[Alerte webhook<br/>Slack, Teams, ntfy…]
+    A -- oui --> W[Alerte webhook]
     DB --> D[Tableau de bord]
     DB -. optionnel .-> L[Libellé Gmail]
 ```
 
-1. **Règles déterministes** (gratuites, explicables) : expéditeurs connus (adresses exactes), factures de fournisseurs connus avec PDF, envois de masse (`List-Unsubscribe`). Un contenu **sensible** n'est jamais tranché par règle : il part directement chez Claude et chez un humain.
-2. **[Jev](https://iajev.com)** : décision typée bon marché via son API REST (`POST /api/v1/decisions/run`) — une catégorie parmi 7 avec probabilités, puis l'urgence. Voie directe **seulement si la confiance est strictement supérieure au seuil** (0,85 par défaut).
-3. **Claude** (API Messages d'Anthropic, `claude-sonnet-5` par défaut, `claude-opus-5-5` en option) : tranche les cas incertains ou sensibles avec tout le contexte, rédige un résumé, propose une action et un **brouillon de réponse** pour les devis et le support. Sortie JSON contrainte par schéma (`output_config.format`), effort réglable.
-4. **Sortie** : table Postgres (+ vue `triage_summary`), alerte webhook pour « urgent » ou « à vérifier », libellé Gmail optionnel, tableau de bord.
-
-**Le projet ne répond jamais seul.** Les brouillons sont stockés, jamais envoyés ; tout cas sensible est marqué « à vérifier » par un garde-fou indépendant du modèle.
-
 Catégories : facture · devis / demande commerciale · support client · RH / candidature · administratif · spam / prospection · autre.
+
+## Ce que des règles de messagerie ne savent pas faire
+
+Le jeu d'exemples contient des cas choisis pour ça (entreprise fictive « Atelier Lumen », mobilier sur mesure) :
+
+- **Comprendre un client mécontent sans mot-clé.** « La table livrée hier est arrivée avec un pied fendu… nous recevons du monde samedi » ne contient ni « réclamation » ni « urgent ». Le tri le classe en support client, urgent, alerte l'équipe et prépare un brouillon de réponse au client.
+- **Repérer une fraude.** Un « changement de coordonnées bancaires » envoyé depuis un domaine presque identique à celui d'un fournisseur connu, ou un « je suis en réunion, achète des cartes cadeaux et garde ça pour toi » (fraude au président) : aucune règle ne les classe d'office, Claude les signale et l'action proposée est de **ne rien payer** et de vérifier par un canal connu.
+- **Préparer une réponse adaptée.** Pour un devis, une plainte ou une question client, Claude rédige un brouillon dans la langue de l'expéditeur, avec les informations à demander. Un humain le relit et l'envoie lui-même.
+- **Savoir dire « je ne sais pas ».** Un « Could someone call me back about the thing we discussed? » reste en « autre », marqué à vérifier, plutôt que d'être rangé au hasard.
 
 ## Démarrage en 3 commandes
 
@@ -62,21 +71,20 @@ Ports modifiables via `DASHBOARD_PORT` et `N8N_PORT` ; tout est publié sur `127
 
 Mesure sur le jeu d'exemples (30 emails FR/EN fictifs), identique en mémoire (`eval`) et via le workflow n8n réel :
 
-| Tranché par | Emails | Part | Coût estimé |
-|---|---:|---:|---:|
-| Règles | 9 | 30 % | 0 € |
-| Jev | 11 | 37 % | 0,025 € (22 crédits) |
-| Claude (`claude-sonnet-5`, effort `low`) | 10 | 33 % | 0,037 € |
-| **Total** | **30** | | **0,062 € ≈ 2,07 € / 1 000 emails** |
-| *Référence : tout envoyé à Claude* | | | *≈ 3,04 € / 1 000 emails* |
+| Tranché par | Emails | Part |
+|---|---:|---:|
+| Règles | 9 | 30 % |
+| Jev (confiance > 0,85) | 11 | 37 % |
+| Claude (incertain ou sensible) | 10 | 33 % |
+| **Total** | **30** | |
 
-- 30/30 catégories conformes à l'attendu, 6 emails marqués « à vérifier », 5 urgents, 8 alertes envoyées.
-- Hypothèses de coût : Jev Starter 16,90 € / 15 000 crédits (1 crédit par tranche de 1 000 tokens d'entrée, 2 appels quand Jev garde la main : catégorie puis urgence) ; Claude Sonnet 5 à 2 $ / 10 $ par million de tokens, 1 $ = 0,86 € ; tokens estimés à 4 caractères par token.
+- 30/30 catégories conformes à l'attendu, 6 emails marqués « à vérifier », 8 alertes envoyées.
+- Le tableau de bord affiche aussi un **coût d'API estimé** par email (tarifs publics des API Jev et Anthropic, tokens estimés à 4 caractères par token). Les hypothèses sont dans `gateway/src/config.rs` et réglables par variables d'environnement.
 
 **À lire honnêtement :**
 
 - En mode démo, **Jev et Claude sont simulés** par des heuristiques déterministes calibrées sur ce jeu d'exemples. Le 30/30 prouve que la mécanique (routage, seuil, garde-fous, alertes, stockage) fonctionne, **pas** la qualité réelle des modèles. Pour la mesurer : `TRIAGE_MODE=live` sur un échantillon étiqueté de la PME (voir plus bas).
-- L'essentiel de l'économie vient des **règles**. À ce volume de texte, deux appels Jev (≈ 0,0023 €) coûtent à peine moins qu'un appel Sonnet 5 en effort bas (≈ 0,003 à 0,0045 €, estimé). Leviers si le coût compte : un seul appel Jev (urgence laissée aux règles), plus de règles métier, ou le seuil ajusté après mesure.
+- L'essentiel de l'économie vient des **règles** : tout ce qu'elles tranchent ne coûte rien. Le seuil de Jev et la liste des règles se règlent après mesure sur de vrais emails.
 - Le prompt système porte un `cache_control`, mais il fait ≈ 650 tokens, sous le minimum de mise en cache de Sonnet 5 (1 024) : il ne sera mis en cache que si vous l'enrichissez (exemples propres à la PME, par exemple).
 
 ## Configuration réelle
@@ -147,10 +155,13 @@ Si votre Docker n'a pas de DNS pendant les builds : `BUILD_NETWORK=host scripts/
 - `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` permet au workflow de lire `GATEWAY_URL` et `ALERT_WEBHOOK_URL` ; aucune clé n'est dans l'environnement de n8n.
 - Jev limite le débit (HTTP 429) : les nœuds Jev et Claude traitent 2 emails toutes les 0,5 s, et une erreur Jev renvoie le cas à Claude plutôt que d'échouer.
 
+## D'où ça vient
+
+Le principe a d'abord été testé en lecture seule sur une quarantaine d'emails réels d'une boîte personnelle : aucun email déplacé, l'administratif jamais classé d'office, l'authentification de l'expéditeur (DMARC) vérifiée avant tout classement automatique. Aucune de ces données n'est dans ce dépôt ; la version publique tourne uniquement sur des emails inventés.
+
 ## Auteur
 
-Gabriel Bernal, développeur freelance Python & IA — [GitHub](https://github.com/Mr-yums) · [LinkedIn](https://fr.linkedin.com/in/gabriel-bernal-b37a0b18a).
-Ce dépôt illustre l'offre « Automatiser un processus métier en 5 jours » : cadrage, règles métier, IA là où elle apporte quelque chose, mesure, et un humain qui garde la main.
+Gabriel Bernal ([Mr-yums](https://github.com/Mr-yums)), développeur freelance à Bordeaux — [LinkedIn](https://fr.linkedin.com/in/gabriel-bernal-b37a0b18a).
 
 Licence [MIT](LICENSE).
 
@@ -160,9 +171,9 @@ Licence [MIT](LICENSE).
 
 **Problem.** Small businesses drown in mixed inbound email (invoices, quote requests, support, job applications, admin, cold outreach, fraud attempts). Sending everything to a large model is expensive and hands human decisions to an AI.
 
-**Solution.** An n8n workflow with a cost cascade: deterministic rules first (free) → **Jev** typed decision (category + probabilities) when confidence is strictly above 0.85 → **Claude** (`claude-sonnet-5` by default) for uncertain or sensitive cases, producing a summary, a proposed action and a reply draft. Results go to Postgres, a webhook alert fires for urgent or needs-review items, and nothing is ever sent automatically. A Rust gateway holds the API keys and the decision logic; n8n orchestrates.
+**Solution.** An n8n workflow with a cost cascade: deterministic rules first (free) → **Jev** typed decision (category + probabilities) when confidence is strictly above 0.85 → **Claude** (`claude-sonnet-5` by default) for uncertain or sensitive cases, producing a summary, a proposed action and a reply draft. Sensitive content (bank details, legal, health, GDPR, fraud) goes straight to Claude. Results go to Postgres, a webhook alert fires for urgent or needs-review items, and nothing is ever sent automatically. A Rust gateway holds the API keys and the decision logic; n8n orchestrates.
 
-**Result (demo mode, 30 fictional emails).** Rules 9, Jev 11, Claude 10; 30/30 expected categories; ≈ €2.07 per 1,000 emails vs ≈ €3.04 if everything went to Claude. In demo mode Jev and Claude are **deterministic simulators** calibrated on this dataset: this proves the mechanics, not model quality.
+**Result (demo mode, 30 fictional emails).** Rules 9, Jev 11, Claude 10; 30/30 expected categories, 6 flagged for human review, 8 alerts. In demo mode Jev and Claude are **deterministic simulators** calibrated on this dataset: this proves the mechanics, not model quality.
 
 **Run it.** `git clone … && cd n8n-email-triage && docker compose up --build` — dashboard on <http://localhost:18090>, n8n on <http://localhost:15678>. No keys needed. For real use, copy `.env.example` to `.env`, set `TRIAGE_MODE=live`, `JEV_API_KEY`, `ANTHROPIC_API_KEY`, and configure the IMAP node in n8n.
 
